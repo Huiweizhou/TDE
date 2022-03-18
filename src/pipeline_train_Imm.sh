@@ -1,0 +1,16 @@
+python3 -m supervised_train \
+	--data_folder data/Immunotherapy \
+	--model gcn \
+	--rnn_model dsum \
+	--year_start 1959 \
+	--year_end 2009 \
+	--batch_size 256\
+	--dim1 128\
+	--dim2 128\
+	--samples_1 20\
+	--samples_2 10\
+	--neg_sample1 20\
+	--neg_sample2 40\
+	--save_path ./Model/Vir/dsum5909 \
+	--epochs 5 \
+	--learning_rate 5e-5
