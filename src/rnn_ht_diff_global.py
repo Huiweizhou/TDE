@@ -1,7 +1,10 @@
 from __future__ import division
 from __future__ import print_function
+
 import tensorflow as tf
 import os
+# tf.compat.v1.set_random_seed(123)
+
 import models_util as models
 import layers as layers
 import tensorflow.keras as tfk
@@ -128,7 +131,6 @@ class SupervisedGraphsage(models.SampleAndAggregate):
                                   for grad, var in grads_and_vars]
         self.grad, _ = clipped_grads_and_vars[0]
         self.opt_op = self.optimizer.apply_gradients(clipped_grads_and_vars)
-
         self.pre_preds=self.g_t
         self.preds = tf.nn.sigmoid(self.node_pred(self.g_t[-1, :, :]))
 
@@ -146,7 +148,6 @@ class SupervisedGraphsage(models.SampleAndAggregate):
             self.global_recurrent = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
                                                  dropout=self.placeholders['dropout'],
                                                  act=lambda x: x)
-
             self.global_current = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
                                                dropout=self.placeholders['dropout'],
                                                act=lambda x: x)
@@ -160,7 +161,6 @@ class SupervisedGraphsage(models.SampleAndAggregate):
                                           dropout=self.placeholders['dropout'],
                                           act=lambda x: x)
             self.conv2d = layers.Conv2d(dropout=self.placeholders['dropout'])
-
             self.aggregators = self.build_aggregators(self.num_samples, self.dims, concat=self.concat,
                                                       model_size=self.model_size)
 
@@ -179,6 +179,8 @@ class SupervisedGraphsage(models.SampleAndAggregate):
         htm1 = h[0]
         tmp_h_1 = h[1]
         pre_label = h[2]
+        # ltm1 = h[3]
+        # t = tf.compat.v1.Print(t,[t])
         t_seq = self.seq[t]
 
         samples1, support_sizes1 = self.sample(self.inputs1, self.layer_infos, t)
@@ -195,16 +197,11 @@ class SupervisedGraphsage(models.SampleAndAggregate):
         self.outputs1 = tf.nn.l2_normalize(outputs1, 1)
         self.outputs2 = tf.nn.l2_normalize(outputs2, 1)
         label = tf.reshape(tf.cast(tf.less_equal(self.placeholders['labels'], t), tf.float32), [-1, 1])
-        # t = tf.compat.v1.Print(t, [t])
         now = t
         self.time_vec = tf.tile(
             self.t2v(tf.reshape(tf.cast(now, dtype=tf.float32), [1, 1])),
             [self.length, 1]
         )
-        # self.posvec = tf.tile(
-        #     tf.expand_dims(self.p2v[now],0),
-        #     [self.length,1]
-        # )
         h_t = tf.nn.bias_add(
             self.recurrent(htm1) +
             self.current(
@@ -219,27 +216,25 @@ class SupervisedGraphsage(models.SampleAndAggregate):
             self.recurrent_bais
         )
         res_tmp_h = h_t
-        center_vec = tf.reduce_mean(tf.multiply(pre_label, htm1))
+        center_vec = tf.reduce_mean(tf.multiply(pre_label, htm1),0)
         center_vec = tf.reshape(center_vec, [1, -1])
         center_vec = tf.tile(
             center_vec,
-            [self.length, self.dim_mult * self.dims[-1]]
+            [self.length, 1]
         )
         global_diff = res_tmp_h - center_vec
         global_ht = tf.nn.bias_add(self.global_recurrent(global_diff
                                                          ) + self.global_current(tmp_h_1), self.global_recurrent_bais)
         h_t = global_ht
         loss = self._loss(label, h_t)
-
         return [res_tmp_h, h_t, label, loss]
 
     # @tf.function
     def _loss(self, label, h_t):
-        node_preds = self.node_pred(h_t)  # 拼接输出
+        node_preds = self.node_pred(h_t)
         loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=node_preds,
             labels=tf.stop_gradient(label)))
-
         res = tf.matmul(h_t, h_t, transpose_b=True)
         return loss + 1e-5 * (
             tf.norm(tf.multiply(tf.math.divide(1, tf.reduce_max(res)), res) - tf.eye(self.length), ord=2))

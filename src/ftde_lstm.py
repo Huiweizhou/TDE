@@ -101,6 +101,8 @@ class SupervisedGraphsage(models.SampleAndAggregate):
         self.hidden_size = 128
         self.range = tf.Variable(tf.range(0, num_window, 1, dtype=tf.int32), trainable=False)
         self.optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.llr)
+        # self.optimizer = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=0.05)
+
         self.lambda_ = 0.0000001
 
         self.build()
@@ -116,15 +118,26 @@ class SupervisedGraphsage(models.SampleAndAggregate):
         # 定义第一个时刻之前的pair的label，全0
         pre_label = tf.zeros_like(tf.expand_dims(self.inputs1, -1), tf.float32)
         losses = tf.zeros_like(0.0)
-        self.tmp_ht, self.l_t, self.g_t, _, self.h_t, self.losses = tf.scan(self.forward, self.range,
+        Ct1 = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
+                        name='Ct1')
+        Ctl = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
+                        name='Ctl')
+        Ctg = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
+                        name='Ctg')
+        self.tmp_ht, self.l_t, self.g_t, _, self.h_t, self.losses,_,_,_ = tf.scan(self.forward, self.range,
                                                                             initializer=[h_0, tmp_h_0, tmp_h_1,
                                                                                          pre_label, tmp_h_t,
-                                                                                         losses],
+                                                                                         losses, Ct1, Ctl, Ctg],
                                                                             parallel_iterations=1,
                                                                             name='h_t_transposed', swap_memory=True)
+        # _, _ , self.h_t, self.losses = tf.scan(self.forward, self.range, initializer=[h_0, tmp_h_0, tmp_h_1,
+        # losses], parallel_iterations=1, name='h_t_transposed', swap_memory=True)
+
         self.loss = tf.reduce_mean(self.losses)
         tf.compat.v1.summary.scalar('loss', self.loss)
         tf.compat.v1.summary.histogram('h_t', self.h_t[-1, :, :])
+        # tf.compat.v1.summary.histogram('W', self.conv2d.vars['weights0'])
+        # tf.compat.v1.summary.histogram('bias', self.conv2d.vars['bias0'])
         self.merged = tf.compat.v1.summary.merge_all()
         grads_and_vars = self.optimizer.compute_gradients(loss=self.loss)
 
@@ -132,6 +145,10 @@ class SupervisedGraphsage(models.SampleAndAggregate):
                                   for grad, var in grads_and_vars]
         self.grad, _ = clipped_grads_and_vars[0]
         self.opt_op = self.optimizer.apply_gradients(clipped_grads_and_vars)
+
+        # self.preds = tf.nn.sigmoid(self.node_pred(
+        #     tf.concat((self.h_t[-1, :, :], self.tmp_ht[-1, :, :]),-1)
+        # ))
         self.pre_preds = self.h_t
         self.preds = tf.nn.sigmoid(self.node_pred(self.h_t[-1, :, :]))
 
@@ -146,37 +163,78 @@ class SupervisedGraphsage(models.SampleAndAggregate):
             self.recurrent = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
                                           dropout=self.placeholders['dropout'],
                                           act=lambda x: x)
-            self.local_recurrent = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
-                                                dropout=self.placeholders['dropout'],
-                                                act=lambda x: x)
-            self.global_recurrent = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
-                                                 dropout=self.placeholders['dropout'],
-                                                 act=lambda x: x)
-            self.local_current = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
-                                              dropout=self.placeholders['dropout'],
-                                              act=lambda x: x)
-            self.global_current = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
-                                               dropout=self.placeholders['dropout'],
-                                               act=lambda x: x)
+            # self.local_recurrent = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
+            #                                     dropout=self.placeholders['dropout'],
+            #                                     act=lambda x: x)
+            # self.global_recurrent = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
+            #                                      dropout=self.placeholders['dropout'],
+            #                                      act=lambda x: x)
+            # self.local_current = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
+            #                                   dropout=self.placeholders['dropout'],
+            #                                   act=lambda x: x)
+            # self.global_current = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
+            #                                    dropout=self.placeholders['dropout'],
+            #                                    act=lambda x: x)
             self.current = layers.Dense((self.dim_mult * self.dims[-1] * 3), self.dim_mult * self.dims[-1],
                                         dropout=self.placeholders['dropout'],
                                         act=lambda x: x)
-            self.parma_p = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
+            self.Wf1 = layers.Dense((self.dim_mult * self.dims[-1] * 3), self.dim_mult * self.dims[-1],
                                         dropout=self.placeholders['dropout'],
                                         act=lambda x: x)
+            self.Wi1 = layers.Dense((self.dim_mult * self.dims[-1] * 3), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wc1 = layers.Dense((self.dim_mult * self.dims[-1] * 3), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wo1 = layers.Dense((self.dim_mult * self.dims[-1] * 3), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wfl = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wil = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wcl = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wol = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wfg = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wig = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wcg = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+            self.Wog = layers.Dense((self.dim_mult * self.dims[-1] * 2), self.dim_mult * self.dims[-1],
+                                        dropout=self.placeholders['dropout'],
+                                        act=lambda x: x)
+
+
+
+
+
+            # self.parma_p = layers.Dense((self.dim_mult * self.dims[-1]), self.dim_mult * self.dims[-1],
+            #                             dropout=self.placeholders['dropout'],
+            #                             act=lambda x: x)
             self.node_pred = layers.Dense((self.dim_mult * self.dims[-1]), 1,
                                           dropout=self.placeholders['dropout'],
                                           act=lambda x: x)
             self.aggregators = self.build_aggregators(self.num_samples, self.dims, concat=self.concat,
                                                       model_size=self.model_size)
 
-            self.recurrent_bais = tf.Variable(name='b', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
+            # self.recurrent_bais = tf.Variable(name='b', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
 
-            self.local_recurrent_bais = tf.Variable(name='b1', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
-            self.global_recurrent_bais = tf.Variable(name='b2', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
+            # self.local_recurrent_bais = tf.Variable(name='b1', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
+            # self.global_recurrent_bais = tf.Variable(name='b2', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
             self.t2v = layers.T2V(self.dim_mult * self.dims[-1])
 
     def forward(self, h, t):
@@ -184,8 +242,10 @@ class SupervisedGraphsage(models.SampleAndAggregate):
         tmp_h_0 = h[1]
         tmp_h_1 = h[2]
         pre_label = h[3]
-        # ltm1 = h[3]
-        # t = tf.compat.v1.Print(t,[t])
+        Ct_1=h[6]
+        Ct_l=h[7]
+        Ct_g=h[8]
+
         t_seq = self.seq[t]
 
         samples1, support_sizes1 = self.sample(self.inputs1, self.layer_infos, t)
@@ -207,40 +267,96 @@ class SupervisedGraphsage(models.SampleAndAggregate):
             self.t2v(tf.reshape(tf.cast(now, dtype=tf.float32), [1, 1])),
             [self.length, 1]
         )
-        h_t = tf.nn.bias_add(
-            self.recurrent(htm1) +
-            self.current(
-                tf.concat(
-                    (
-                        self.outputs1,
-                        self.outputs2,
-                        self.time_vec,
-                    ), -1
-                )
-            ),
-            self.recurrent_bais
-        )
+        # h_t = tf.nn.bias_add(
+        #     self.recurrent(htm1) +
+        #     self.current(
+        #         tf.concat(
+        #             (
+        #                 self.outputs1,
+        #                 self.outputs2,
+        #                 self.time_vec,
+        #             ), -1
+        #         )
+        #     ),
+        #     self.recurrent_bais
+        # )
+        ft = tf.sigmoid(
+                self.Wf1(tf.concat((htm1, self.outputs1, self.outputs2), -1))
+            )
+        
+        it = tf.sigmoid(
+                self.Wi1(tf.concat((htm1, self.outputs1, self.outputs2), -1))
+            )
+        C_hat = tf.tanh(
+                self.Wc1(tf.concat((htm1, self.outputs1, self.outputs2), -1))
+            )
+        C_t1 = tf.multiply(ft, Ct_1) + tf.multiply(it, C_hat)
+        ot = tf.sigmoid(
+                self.Wo1(tf.concat((htm1, self.outputs1, self.outputs2), -1))
+            )
+        h_t=tf.multiply(ot,tf.tanh(C_t1))
         res_tmp_h = h_t
-        center_vec = tf.reduce_mean(tf.multiply(pre_label, htm1),0)
+
+        center_vec = tf.reduce_mean(tf.multiply(pre_label, htm1))
+
         center_vec = tf.reshape(center_vec, [1, -1])
         center_vec = tf.tile(
             center_vec,
-            [self.length, 1]
+            [self.length, self.dim_mult * self.dims[-1]]
         )
+        # 拼接 0.77386
+        # 卷积
         local_diff = res_tmp_h - htm1
         global_diff = res_tmp_h - center_vec
-        local_ht = tf.nn.bias_add(self.local_recurrent(local_diff
-                                                       ) + self.local_current(tmp_h_0), self.local_recurrent_bais)
-        global_ht = tf.nn.bias_add(self.global_recurrent(global_diff
-                                                         ) + self.global_current(tmp_h_1), self.global_recurrent_bais)
+        ftl = tf.sigmoid(
+                self.Wfl(tf.concat((local_diff, tmp_h_0), -1))
+            )
+        itl = tf.sigmoid(
+                self.Wil(tf.concat((local_diff, tmp_h_0), -1))
+            )
+        C_hatl = tf.tanh(
+                self.Wcl(tf.concat((local_diff, tmp_h_0), -1))
+            )
+        C_tl = tf.multiply(ftl, Ct_l) + tf.multiply(itl, C_hatl)
+        otl = tf.sigmoid(
+                self.Wol(tf.concat((local_diff, tmp_h_0), -1))
+            )
+        local_ht=tf.multiply(otl,tf.tanh(C_tl))
+
+        ftg = tf.sigmoid(
+                self.Wfg(tf.concat((global_diff, tmp_h_1), -1))
+            )
+        
+        itg = tf.sigmoid(
+                self.Wig(tf.concat((global_diff, tmp_h_1), -1))
+            )
+        C_hatg = tf.tanh(
+                self.Wcg(tf.concat((global_diff, tmp_h_1), -1))
+            )
+        C_tg = tf.multiply(ftg, Ct_g) + tf.multiply(itg, C_hatg)
+        otg = tf.sigmoid(
+                self.Wog(tf.concat((global_diff, tmp_h_1), -1))
+            )
+        global_ht=tf.multiply(otg,tf.tanh(C_tg))
+
+
+
+        # local_ht = tf.nn.bias_add(self.local_recurrent(local_diff
+        #                                                ) + self.local_current(tmp_h_0), self.local_recurrent_bais)
+        # global_ht = tf.nn.bias_add(self.global_recurrent(global_diff
+        #                                                  ) + self.global_current(tmp_h_1), self.global_recurrent_bais)
+
+
         h_t = local_ht+global_ht
         loss = self._loss(label, h_t)
 
-        return [res_tmp_h, local_ht, global_ht, label, h_t, loss]
+        # return [res_tmp_h, local_ht, global_ht, label, h_t, loss, Ct_1, Ct_l, Ct_g]
+        return [res_tmp_h, local_ht, global_ht, label, h_t, loss, C_t1, C_tl, C_tg]
+
 
     # @tf.function
     def _loss(self, label, h_t):
-        node_preds = self.node_pred(h_t)
+        node_preds = self.node_pred(h_t)  # 拼接输出
         loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=node_preds,
             labels=tf.stop_gradient(label)))

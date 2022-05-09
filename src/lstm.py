@@ -1,15 +1,21 @@
 from __future__ import division
 from __future__ import print_function
+
 from networkx.generators.random_graphs import fast_gnp_random_graph
+
 import tensorflow as tf
 import os
+# tf.compat.v1.set_random_seed(123)
+# import tensorflow_addons as tfa
 import models_util as models
 import layers as layers
 import tensorflow.keras as tfk
+
 import numpy as np
 from aggregators import MeanAggregator, MaxPoolingAggregator, MeanPoolingAggregator, SeqAggregator, GCNAggregator
 
 tf.compat.v1.disable_eager_execution()
+
 flags = tf.compat.v1.app.flags
 FLAGS = flags.FLAGS
 
@@ -100,12 +106,12 @@ class SupervisedGraphsage(models.SampleAndAggregate):
         dummy_emb = tf.zeros_like(tf.expand_dims(self.inputs1, -1), tf.float32)
         h_0 = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
                         name='h_0')
-        tmp_h_0 = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
-                        name='tmp_h_0')
+        # tmp_h_0 = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
+        #                 name='tmp_h_0')
         Ct = tf.matmul(dummy_emb, tf.zeros(dtype=tf.float32, shape=(1, self.dim_mult * self.dims[-1])),
                         name='Ct')
         losses = tf.zeros_like(0.0)
-        self.h_t, self.tmp_h_0 ,_, self.losses = tf.scan(self.forward, self.range, initializer=[h_0, tmp_h_0, Ct, losses], parallel_iterations=1,
+        self.h_t, _, self.losses = tf.scan(self.forward, self.range, initializer=[h_0, Ct, losses], parallel_iterations=1,
                                         name='h_t_transposed', swap_memory=True)
 
         self.loss = tf.reduce_mean(self.losses)
@@ -158,14 +164,14 @@ class SupervisedGraphsage(models.SampleAndAggregate):
             self.Wo = layers.Dense((self.dim_mult * self.dims[-1] * 3), self.dim_mult * self.dims[-1],
                                         dropout=self.placeholders['dropout'],
                                         act=lambda x: x)
-            self.bf = tf.Variable(name='bf', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
-            self.bi = tf.Variable(name='bi', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
-            self.bc = tf.Variable(name='bc', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
-            self.bo = tf.Variable(name='bo', initial_value=lambda: tf.initializers.ones()(
-                self.dim_mult * self.dims[-1]))
+            # self.bf = tf.Variable(name='bf', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
+            # self.bi = tf.Variable(name='bi', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
+            # self.bc = tf.Variable(name='bc', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
+            # self.bo = tf.Variable(name='bo', initial_value=lambda: tf.initializers.ones()(
+            #     self.dim_mult * self.dims[-1]))
 
 
             self.recurrent_bais = tf.Variable(name='b', initial_value=lambda: tf.initializers.ones()(
@@ -173,18 +179,23 @@ class SupervisedGraphsage(models.SampleAndAggregate):
 
             self.res_recurrent_bais = tf.Variable(name='b1', initial_value=lambda: tf.initializers.ones()(
                 self.dim_mult * self.dims[-1]))
+            # self.test = tf.Variable(tf.random.uniform([200, 200], minval=-1, maxval=1, dtype=tf.float32))
 
     def forward(self, h, t):
         htm1 = h[0]
-        tmp_h = h[1]
-        Ct_1 = h[2]
-        ltm1 = h[3]
+        # tmp_h = h[1]
+        Ct_1 = h[1]
+        # ltm1 = h[3]
+
 
         t_seq = self.seq[t]
+
         samples1, support_sizes1 = self.sample(self.inputs1, self.layer_infos, t)
         samples2, support_sizes2 = self.sample(self.inputs2, self.layer_infos, t)
+
         samples1 = self.gather_list(t_seq, samples1)
         samples2 = self.gather_list(t_seq, samples2)
+
         outputs1 = self.aggregate2(samples1, self.dims, self.num_samples,
                                    support_sizes1, self.aggregators, concat=self.concat, model_size=self.model_size)
 
@@ -192,38 +203,52 @@ class SupervisedGraphsage(models.SampleAndAggregate):
                                    support_sizes2, self.aggregators, concat=self.concat, model_size=self.model_size)
         self.outputs1 = tf.nn.l2_normalize(outputs1, 1)
         self.outputs2 = tf.nn.l2_normalize(outputs2, 1)
+   
+        # h_t = tf.nn.bias_add(self.recurrent(htm1) + self.current(tf.concat((self.outputs1, self.outputs2), -1)),
+        #                      self.recurrent_bais)
         ft = tf.sigmoid(
-                tf.nn.bias_add(
-                    self.Wf(tf.concat((tmp_h, self.outputs1, self.outputs2), -1)), self.bf
-                    )
+                self.Wf(tf.concat((htm1, self.outputs1, self.outputs2), -1))
             )
         
         it = tf.sigmoid(
-                tf.nn.bias_add(
-                    self.Wi(tf.concat((tmp_h, self.outputs1, self.outputs2), -1)), self.bi
-                    )
+                self.Wi(tf.concat((htm1, self.outputs1, self.outputs2), -1))
             )
         C_hat = tf.tanh(
-                tf.nn.bias_add(
-                    self.Wc(tf.concat((tmp_h, self.outputs1, self.outputs2), -1)), self.bc
-                    )
+                self.Wc(tf.concat((htm1, self.outputs1, self.outputs2), -1))
             )
         C_t = tf.multiply(ft, Ct_1) + tf.multiply(it, C_hat)
         ot = tf.sigmoid(
-                tf.nn.bias_add(
-                    self.Wo(tf.concat((tmp_h, self.outputs1, self.outputs2), -1)), self.bo
-                    )
+                self.Wo(tf.concat((htm1, self.outputs1, self.outputs2), -1))
             )
         h_t=tf.multiply(ot,tf.tanh(C_t))
 
+
         label = tf.reshape(tf.cast(tf.less_equal(self.placeholders['labels'], t), tf.float32), [-1, 1])
         loss = self._loss(label, h_t)
-        return [h_t, htm1, C_t, loss]
+        # return [h_t, htm1, C_t, loss]
+        return [h_t, C_t, loss]
 
     # @tf.function
     def _loss(self, label, h_t):
         node_preds = self.node_pred(h_t)
+        # label = tf.compat.v1.Print(label, [label])
         loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             logits=node_preds,
             labels=tf.stop_gradient(label)))
         return loss
+    
+    @tf.function
+    def focal_loss(self, label, h_t, alpha=0.2, gamma=5):
+        node_preds = tf.sigmoid(self.node_pred(h_t))
+        zeros = tf.zeros_like(node_preds, dtype=node_preds.dtype)
+        # For positive prediction, only need consider front part loss, back part is 0;
+        # target_tensor > zeros <=> z=1, so positive coefficient = z - p.
+        pos_p_sub = tf.where(tf.stop_gradient(label) > zeros, label - node_preds, zeros) # positive sample 寻找正样本，并进行填充
+
+        # For negative prediction, only need consider back part loss, front part is 0;
+        # target_tensor > zeros <=> z=1, so negative coefficient = 0.
+        neg_p_sub = tf.where(tf.stop_gradient(label) > zeros, zeros, node_preds) # negative sample 寻找负样本，并进行填充
+        per_entry_cross_ent = - alpha * (pos_p_sub ** gamma) * tf.compat.v1.log(tf.clip_by_value(node_preds, 1e-8, 1.0)) \
+                              - (1 - alpha) * (neg_p_sub ** gamma) * tf.compat.v1.log(tf.clip_by_value(1.0 - node_preds, 1e-8, 1.0))
+        return tf.reduce_mean(per_entry_cross_ent)
+

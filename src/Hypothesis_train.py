@@ -730,6 +730,10 @@ class Hypo_Gen():
             from rnn_ht_diff_sum import SupervisedGraphsage
         elif self.FLAGS.rnn_model == 'lstm':
             from lstm import SupervisedGraphsage
+        elif self.FLAGS.rnn_model == 'ftde_lstm':
+            from ftde_lstm import SupervisedGraphsage
+        elif self.FLAGS.rnn_model == 'st':
+            from static import SupervisedGraphsage
 
         if self.FLAGS.model == 'graphsage_mean':
             # Create model
